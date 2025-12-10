@@ -77,18 +77,24 @@ Set this variable before `mini-frame' mode activation."
   "For this commands minibuffer will not be displayed in child frame."
   :type '(repeat (choice function regexp)))
 
+(defcustom mini-frame-only-commands nil
+  "When non-nil, only these commands will use mini-frame.
+This is a whitelist that takes precedence over `mini-frame-ignore-commands'.
+When this variable is nil, the blacklist behavior of
+`mini-frame-ignore-commands' is used instead."
+  :type '(repeat (choice function regexp)))
+
 (defcustom mini-frame-ignore-functions nil
   "This functions will be advised to not display minibuffer in child frame.
 Set this variable before `mini-frame' mode activation."
   :type '(repeat function))
 
-(defcustom mini-frame-show-parameters '((left . 0.5)
-                                        (top . 0.0)
-                                        (width . 1.0)
+(defcustom mini-frame-show-parameters '((width . 0.7)
                                         (height . 1))
   "Frame parameters which will be applied to mini frame on show.
 Unless background color is specified it will be set to result of
-`mini-frame-background-color-function'."
+`mini-frame-background-color-function'.
+Position is determined by `mini-frame-position' unless explicitly set."
   :type '(choice alist function))
 
 (defcustom mini-frame-color-shift-step 27
@@ -174,6 +180,28 @@ This allow to avoid mini-frame recreation in case its parent frame were deleted.
   "Make mini-frame frame standalone instead of child-frame."
   :type 'boolean)
 
+(defcustom mini-frame-position 'center
+  "Position for mini-frame.
+Can be 'center, 'top-center, 'bottom-center, 'top-left, 'top-right,
+'bottom-left, 'bottom-right, or 'custom."
+  :type '(choice (const :tag "Center" center)
+                 (const :tag "Top center" top-center)
+                 (const :tag "Bottom center" bottom-center)
+                 (const :tag "Top left" top-left)
+                 (const :tag "Top right" top-right)
+                 (const :tag "Bottom left" bottom-left)
+                 (const :tag "Bottom right" bottom-right)
+                 (const :tag "Custom" custom)))
+
+(defcustom mini-frame-offset '(0 . 0)
+  "Offset from position as (X . Y) in pixels.
+Used when `mini-frame-position' is not 'center."
+  :type '(cons integer integer))
+
+(defcustom mini-frame-border-width 2
+  "Border width for mini-frame."
+  :type 'integer)
+
 
 (defvar mini-frame-frame nil)
 (defvar mini-frame-selected-frame nil)
@@ -209,28 +237,36 @@ This allow to avoid mini-frame recreation in case its parent frame were deleted.
 (defun mini-frame--resize-mini-frame (frame)
   "Resize FRAME vertically only.
 This function used as value for `resize-mini-frames' variable."
-  (funcall mini-frame--fit-frame-function
-           frame
-           mini-frame-resize-max-height
-           (if (eq mini-frame-resize 'grow-only)
-               (max (frame-parameter frame 'height)
-                    mini-frame-resize-min-height)
-             mini-frame-resize-min-height)
-           ;; A max-width must be included to work around a bug in Emacs which
-           ;; causes wrapping to not be taken into account in some situations
-           ;; https://debbugs.gnu.org/cgi/bugreport.cgi?bug=56102
-           (window-body-width)
-           nil
-           'vertically)
-  (when (and (frame-live-p mini-frame-completions-frame)
-             (frame-visible-p mini-frame-completions-frame))
-    (let ((show-parameters (if (functionp mini-frame-completions-show-parameters)
-                               (funcall mini-frame-completions-show-parameters)
-                             mini-frame-completions-show-parameters)))
-      (unless (alist-get 'top show-parameters)
-        (modify-frame-parameters
-         mini-frame-completions-frame
-         `((top . ,(funcall mini-frame-completions-top-function))))))))
+  ;; If quit is pending, don't do anything - just return immediately.
+  ;; This prevents quit from being signaled during redisplay.
+  (unless quit-flag
+    (condition-case nil
+        (progn
+          (funcall mini-frame--fit-frame-function
+                   frame
+                   mini-frame-resize-max-height
+                   (if (eq mini-frame-resize 'grow-only)
+                       (max (frame-parameter frame 'height)
+                            mini-frame-resize-min-height)
+                     mini-frame-resize-min-height)
+                   ;; A max-width must be included to work around a bug in Emacs which
+                   ;; causes wrapping to not be taken into account in some situations
+                   ;; https://debbugs.gnu.org/cgi/bugreport.cgi?bug=56102
+                   (window-body-width)
+                   nil
+                   'vertically)
+          (when (and (frame-live-p mini-frame-completions-frame)
+                     (frame-visible-p mini-frame-completions-frame))
+            (let ((show-parameters (if (functionp mini-frame-completions-show-parameters)
+                                       (funcall mini-frame-completions-show-parameters)
+                                     mini-frame-completions-show-parameters)))
+              (unless (alist-get 'top show-parameters)
+                (modify-frame-parameters
+                 mini-frame-completions-frame
+                 `((top . ,(funcall mini-frame-completions-top-function))))))))
+      ;; Silently catch quit and errors during redisplay
+      (quit nil)
+      (error nil))))
 
 (defun mini-frame--hide-completions (&optional frame _force)
   "Hide completions FRAME."
@@ -264,18 +300,55 @@ This function used as value for `resize-mini-frames' variable."
       (when (and (frame-live-p frame) (frame-visible-p frame))
         (select-frame-set-input-focus frame)))))
 
+(defun mini-frame--get-position (frame)
+  "Calculate position for FRAME based on `mini-frame-position'."
+  (let* ((parent (frame-parent frame))
+         (parent-width (frame-pixel-width parent))
+         (parent-height (frame-pixel-height parent))
+         (frame-width (frame-pixel-width frame))
+         (frame-height (frame-pixel-height frame))
+         (offset-x (car mini-frame-offset))
+         (offset-y (cdr mini-frame-offset)))
+    (pcase mini-frame-position
+      ('center
+       (cons (/ (- parent-width frame-width) 2)
+             (/ (- parent-height frame-height) 2)))
+      ('top-center
+       (cons (/ (- parent-width frame-width) 2)
+             (+ 50 offset-y)))
+      ('bottom-center
+       (cons (/ (- parent-width frame-width) 2)
+             (- parent-height frame-height 50 offset-y)))
+      ('top-left
+       (cons (+ 50 offset-x)
+             (+ 50 offset-y)))
+      ('top-right
+       (cons (- parent-width frame-width 50 offset-x)
+             (+ 50 offset-y)))
+      ('bottom-left
+       (cons (+ 50 offset-x)
+             (- parent-height frame-height 50 offset-y)))
+      ('bottom-right
+       (cons (- parent-width frame-width 50 offset-x)
+             (- parent-height frame-height 50 offset-y)))
+      (_ (cons (/ (- parent-width frame-width) 2)
+               (/ (- parent-height frame-height) 2))))))
+
 (defun mini-frame--make-frame (parameters)
   "Make frame with common parameters and PARAMETERS."
   (let ((frame (make-frame (append parameters
-                                   '((visibility . nil)
+                                   `((visibility . nil)
                                      (user-position . t)
                                      (user-size . t)
                                      (keep-ratio . t)
-                                     (undecorated . t)
+                                     (undecorated . nil)
                                      (desktop-dont-save . t)
-                                     (child-frame-border-width . 3)
-                                     (internal-border-width . 3)
+                                     (child-frame-border-width . ,mini-frame-border-width)
+                                     (internal-border-width . ,mini-frame-border-width)
                                      (drag-internal-border . t)
+				     (tab-bar-lines . 0)
+                                     (tool-bar-lines . 0)
+                                     (menu-bar-lines . 0)
                                      (z-group . above))))))
     (set-face-background 'fringe nil frame)
     (when mini-frame-internal-border-color
@@ -349,6 +422,13 @@ ALIST is passed to `window--display-buffer'."
                                             show-parameters))))
     (mini-frame--move-frame-to-frame mini-frame-frame mini-frame-selected-frame)
     (modify-frame-parameters mini-frame-frame show-parameters)
+    ;; Apply custom positioning if not using custom parameters
+    (unless (or (alist-get 'left show-parameters)
+                (alist-get 'top show-parameters))
+      (let ((pos (mini-frame--get-position mini-frame-frame)))
+        (modify-frame-parameters mini-frame-frame
+                                 `((left . ,(car pos))
+                                   (top . ,(cdr pos))))))
     (when (and (frame-live-p mini-frame-completions-frame)
                (frame-visible-p mini-frame-completions-frame))
       (make-frame-invisible mini-frame-completions-frame))
@@ -386,20 +466,45 @@ ALIST is passed to `window--display-buffer'."
   (let ((mini-frame-ignore-this t))
     (apply fn args)))
 
+(defun mini-frame--handle-quit-advice (orig-fn &rest args)
+  "Advice for `keyboard-quit' to handle mini-frame.
+ORIG-FN is the original function, ARGS are its arguments."
+  (if (and (frame-live-p mini-frame-frame)
+           (frame-visible-p mini-frame-frame))
+      (progn
+        ;; Hide frames
+        (when (frame-live-p mini-frame-frame)
+          (make-frame-invisible mini-frame-frame))
+        (when (frame-live-p mini-frame-completions-frame)
+          (make-frame-invisible mini-frame-completions-frame))
+        ;; Abort recursive edit
+        (abort-recursive-edit))
+    (apply orig-fn args)))
+
 (defun mini-frame-read-from-minibuffer (fn &rest args)
   "Show minibuffer-only child frame (if needed) and call FN with ARGS."
   (cond
    ((or mini-frame-ignore-this
-        (not (display-graphic-p))
+        (and (not (display-graphic-p))
+             (not (featurep 'tty-child-frames)))
         (minibufferp)
         isearch-mode
         (and (symbolp this-command)
-             (catch 'ignored
-               (dolist (ignored-command mini-frame-ignore-commands)
-                 (when (if (stringp ignored-command)
-                           (string-match-p ignored-command (symbol-name this-command))
-                         (eq ignored-command this-command))
-                   (throw 'ignored t))))))
+             (if mini-frame-only-commands
+                 ;; Whitelist mode: skip mini-frame unless command matches
+                 (not (catch 'matched
+                        (dolist (cmd mini-frame-only-commands)
+                          (when (if (stringp cmd)
+                                    (string-match-p cmd (symbol-name this-command))
+                                  (eq cmd this-command))
+                            (throw 'matched t)))))
+               ;; Blacklist mode (original behavior)
+               (catch 'ignored
+                 (dolist (ignored-command mini-frame-ignore-commands)
+                   (when (if (stringp ignored-command)
+                             (string-match-p ignored-command (symbol-name this-command))
+                           (eq ignored-command this-command))
+                     (throw 'ignored t)))))))
     (apply fn args))
    ((and (frame-live-p mini-frame-frame)
          (or mini-frame-standalone
@@ -461,6 +566,15 @@ ALIST is passed to `window--display-buffer'."
 (defvar minibuffer-follows-selected-frame)
 (defvar mini-frame--minibuffer-follows-selected-frame)
 
+(defun mini-frame--resize-frame-advice (orig-fn frame)
+  "Advice for `window--resize-mini-frame' to catch quit during redisplay.
+ORIG-FN is the original function, FRAME is the frame to resize."
+  (condition-case nil
+      (funcall orig-fn frame)
+    ;; Silently catch quit and errors during redisplay
+    (quit nil)
+    (error nil)))
+
 ;;;###autoload
 (define-minor-mode mini-frame-mode
   "Show minibuffer in child frame on read-from-minibuffer."
@@ -473,6 +587,8 @@ ALIST is passed to `window--display-buffer'."
     (mini-frame--advice mini-frame-advice-functions #'mini-frame-read-from-minibuffer)
     (mini-frame--advice mini-frame-ignore-functions #'mini-frame--ignore-function)
     (advice-add 'minibuffer-selected-window :around #'mini-frame--minibuffer-selected-window)
+    (advice-add 'window--resize-mini-frame :around #'mini-frame--resize-frame-advice)
+    (advice-add 'keyboard-quit :around #'mini-frame--handle-quit-advice)
     (unless mini-frame-create-lazy
       (add-hook 'window-setup-hook
                 (lambda ()
@@ -485,6 +601,8 @@ ALIST is passed to `window--display-buffer'."
     (mini-frame--advice mini-frame-advice-functions #'mini-frame-read-from-minibuffer t)
     (mini-frame--advice mini-frame-ignore-functions #'mini-frame--ignore-function t)
     (advice-remove 'minibuffer-selected-window #'mini-frame--minibuffer-selected-window)
+    (advice-remove 'window--resize-mini-frame #'mini-frame--resize-frame-advice)
+    (advice-remove 'keyboard-quit #'mini-frame--handle-quit-advice)
     (when (frame-live-p mini-frame-frame)
       (delete-frame mini-frame-frame))
     (when (frame-live-p mini-frame-completions-frame)

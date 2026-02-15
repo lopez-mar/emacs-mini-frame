@@ -71,9 +71,36 @@ Another option for Gnome Shell users is to use the following code in initializat
 (setq x-gtk-resize-child-frames 'resize-mode)
 ```
 
-## Ignore commands
+## Controlling which commands use mini-frame
 
-One can configure the list of commands that must not be shown in the child frame by customizing the `mini-frame-ignore-commands`. The `eval-expression` command is there by default because mini-frame have no modeline to display eldoc hints. And because there must be some place to turn `mini-frame-mode` off if something goes wrong (I hope not) :)
+### Ignoring commands (blacklist)
+
+One can configure the list of commands that must not be shown in the child frame by customizing `mini-frame-ignore-commands`. The `eval-expression` command is there by default because mini-frame has no modeline to display eldoc hints. And because there must be some place to turn `mini-frame-mode` off if something goes wrong (I hope not) :)
+
+Entries can be command symbols or regex strings matched against the command name:
+
+```elisp
+(setq mini-frame-ignore-commands
+      '(eval-expression "edebug-eval-expression" debugger-eval-expression))
+```
+
+### Allowing commands (whitelist)
+
+If you prefer a whitelist approach, set `mini-frame-only-commands` to a list of commands (symbols or regexes). When non-nil, *only* matching commands will use mini-frame, and `mini-frame-ignore-commands` is not consulted:
+
+```elisp
+(setq mini-frame-only-commands '(execute-extended-command find-file "consult-.*"))
+```
+
+### Ignoring by predicate
+
+For more dynamic control, `mini-frame-ignore-predicates` accepts a list of zero-argument functions. If any function returns non-nil, mini-frame is skipped for that minibuffer invocation. Predicates are checked before both the blacklist and whitelist.
+
+For example, to prevent mini-frame from handling [visual-regexp](https://github.com/benma/visual-regexp.el) prompts:
+
+```elisp
+(setq mini-frame-ignore-predicates '(vr--in-replace vr--in-find))
+```
 
 ## Installation and usage
 

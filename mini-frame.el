@@ -84,6 +84,13 @@ When this variable is nil, the blacklist behavior of
 `mini-frame-ignore-commands' is used instead."
   :type '(repeat (choice function regexp)))
 
+(defcustom mini-frame-ignore-predicates nil
+  "List of predicate functions to determine if mini-frame should be skipped.
+Each entry is a function of no arguments.  If any function returns non-nil,
+the minibuffer will not be displayed in the child frame.
+This is checked in addition to `mini-frame-ignore-commands'."
+  :type '(repeat function))
+
 (defcustom mini-frame-ignore-functions nil
   "This functions will be advised to not display minibuffer in child frame.
 Set this variable before `mini-frame' mode activation."
@@ -489,6 +496,7 @@ ORIG-FN is the original function, ARGS are its arguments."
              (not (featurep 'tty-child-frames)))
         (minibufferp)
         isearch-mode
+        (run-hook-with-args-until-success 'mini-frame-ignore-predicates)
         (and (symbolp this-command)
              (if mini-frame-only-commands
                  ;; Whitelist mode: skip mini-frame unless command matches

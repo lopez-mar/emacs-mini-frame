@@ -348,7 +348,7 @@ This function used as value for `resize-mini-frames' variable."
                                      (user-position . t)
                                      (user-size . t)
                                      (keep-ratio . t)
-                                     (undecorated . nil)
+                                     (undecorated . ,(display-graphic-p))
                                      (desktop-dont-save . t)
                                      (child-frame-border-width . ,mini-frame-border-width)
                                      (internal-border-width . ,mini-frame-border-width)
